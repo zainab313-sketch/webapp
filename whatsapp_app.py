@@ -93,17 +93,6 @@ def send_message_to_number(driver, phone, encoded_message, log_callback):
     except Exception as e:
         log_callback(f"❌ Failed: {phone} — {e}")
         return False
-    
-
-def show_all_contacts():
-    conn = sqlite3.connect("whatsapp_contacts.db")
-    c = conn.cursor()
-    c.execute("SELECT phone, name, status, timestamp FROM contacts")
-    rows = c.fetchall()
-    for row in rows:
-        print(row)
-    conn.close()
-
 
 # ---------------------------------------------
 #               Modern GUI
@@ -114,7 +103,7 @@ class WhatsAppModernApp(ctk.CTk):
         super().__init__()
 
         self.title("WhatsApp Bulk Messenger — Modern Edition")
-        self.geometry("780x620")
+        self.geometry("780x700")
 
         ctk.set_appearance_mode("dark")     # "light" / "dark" / "system"
         ctk.set_default_color_theme("blue") # blue, dark-blue, green
@@ -156,6 +145,12 @@ class WhatsAppModernApp(ctk.CTk):
                                     command=self.start_sending, height=45, corner_radius=10)
         send_button.pack(pady=10)
 
+        # ---------- VIEW CONTACTS BUTTON ----------
+        view_button = ctk.CTkButton(self, text="View Contacts & Status",
+                                     font=("Poppins", 14, "bold"),
+                                     command=self.show_contacts, height=40, corner_radius=10)
+        view_button.pack(pady=5)
+
         # ---------- LOG AREA ----------
         log_frame = ctk.CTkFrame(self, corner_radius=15)
         log_frame.pack(pady=10, padx=20, fill="both", expand=True)
@@ -180,6 +175,35 @@ class WhatsAppModernApp(ctk.CTk):
         self.log_window.insert("end", text + "\n")
         self.log_window.see("end")
         self.update()
+
+    # -------------------------------------
+    #          Show Contacts & Status
+    # -------------------------------------
+    def show_contacts(self):
+        contacts_window = ctk.CTkToplevel(self)
+        contacts_window.title("Contacts & Status")
+        contacts_window.geometry("600x400")
+
+        frame = ctk.CTkFrame(contacts_window, corner_radius=15)
+        frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        textbox = ctk.CTkTextbox(frame, width=580, height=350)
+        textbox.pack(padx=10, pady=10, fill="both", expand=True)
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT phone, name, status, timestamp FROM contacts")
+        rows = c.fetchall()
+        conn.close()
+
+        textbox.insert("0.0", f"{'Phone':<15}{'Name':<20}{'Status':<10}{'Timestamp':<20}\n")
+        textbox.insert("0.0", "-"*70 + "\n")
+        for row in rows:
+            phone, name, status, timestamp = row
+            timestamp = timestamp if timestamp else "-"
+            textbox.insert("end", f"{phone:<15}{name:<20}{status:<10}{timestamp:<20}\n")
+
+        textbox.configure(state="disabled")  # make read-only
 
     # -------------------------------------
     #          Main Sending Logic
@@ -207,14 +231,12 @@ class WhatsAppModernApp(ctk.CTk):
         if df.empty:
             self.log("❌ No valid phone numbers.")
             return
-        
+
         # ---------- Add contacts to database ----------
         for idx, row in df.iterrows():
             phone = clean_phone(row["number"])
             name = row.get("name", "")
             add_contact(phone, name)
-        show_all_contacts()  # <- This will print all contacts in the DB
-
 
         self.log("🚀 Starting Chrome…")
 
@@ -266,20 +288,8 @@ class WhatsAppModernApp(ctk.CTk):
         self.log("🎉 All messages sent!")
         driver.quit()
 
-
 # ---------------- RUN APP ----------------
 if __name__ == "__main__":
     init_db()
-    import sqlite3
-
-    conn = sqlite3.connect("whatsapp_contacts.db")
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
-    table_exists = c.fetchone()
-    if table_exists:
-        print("✅ Database connected and 'contacts' table exists!")
-    else:
-        print("❌ Database connection failed or table missing.")
-    conn.close()
     app = WhatsAppModernApp()
     app.mainloop()

@@ -106,13 +106,34 @@ def main():
         print(f"[ERROR] Excel file must contain a '{PHONE_COLUMN}' column")
         return
 
-    # Clean numbers and drop blanks
-    df[PHONE_COLUMN] = df[PHONE_COLUMN].apply(clean_phone)
-    df = df[df[PHONE_COLUMN] != ""].drop_duplicates(subset=[PHONE_COLUMN]).reset_index(drop=True)
-    if df.empty:
-        print("[ERROR] No valid phone numbers found in the Excel file.")
-        return
+# Clean numbers and drop blanks
+    # df[PHONE_COLUMN] = df[PHONE_COLUMN].apply(clean_phone)
+    # df = df[df[PHONE_COLUMN] != ""].drop_duplicates(subset=[PHONE_COLUMN]).reset_index(drop=True)
+    # if df.empty:
+    #     print("[ERROR] No valid phone numbers found in the Excel file.")
+    #     return
 
+
+def normalize_number(number: str) -> str:
+    number = number.strip().replace(" ", "").replace("-", "")
+
+    # With country code already (92xxxxxxxxxx)
+    if number.startswith("92") and len(number) == 12:
+        return number
+
+    # Starts with 03 (Pakistani format)
+    if number.startswith("03") and len(number) == 11:
+        return "92" + number[1:]   # replace 0 with 92
+
+    # Starts with 0 but not 03
+    if number.startswith("0") and len(number) >= 10:
+        return "92" + number[1:]
+
+    # Local number like 3xxxxxxxxx
+    if number.startswith("3") and len(number) == 10:
+        return "92" + number
+
+    return number
     # Setup Chrome
     options = webdriver.ChromeOptions()
 

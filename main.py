@@ -225,7 +225,8 @@ class WhatsAppModernApp(ctk.CTk):
             self.log("❌ Excel missing 'number' column.")
             return
 
-        df["number"] = df["number"].apply(clean_phone)
+        # df["number"] = df["number"].apply(clean_phone)
+        df["number"] = df["number"].apply(clean_phone).apply(normalize_number)
         df = df[df["number"] != ""].reset_index(drop=True)
 
         if df.empty:

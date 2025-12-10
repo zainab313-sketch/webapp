@@ -13,6 +13,45 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
+import sqlite3
+import datetime
+
+# ---------------- Database Setup ----------------
+DB_FILE = "whatsapp_contacts.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT UNIQUE,
+            name TEXT,
+            status TEXT,
+            timestamp TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def add_contact(phone, name):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT OR IGNORE INTO contacts (phone, name, status) VALUES (?, ?, ?)", 
+                  (phone, name, "Pending"))
+        conn.commit()
+    except Exception as e:
+        print("DB insert error:", e)
+    conn.close()
+
+def update_status(phone, status):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("UPDATE contacts SET status=?, timestamp=? WHERE phone=?", (status, timestamp, phone))
+    conn.commit()
+    conn.close()
 
 # ---------------------------------------------
 #           WhatsApp Functions
@@ -23,7 +62,6 @@ def clean_phone(number_str):
         return ""
     s = str(number_str)
     return "".join(ch for ch in s if ch.isdigit())
-
 
 def send_message_to_number(driver, phone, encoded_message, log_callback):
     url = f"https://web.whatsapp.com/send?phone={phone}&text={encoded_message}"
@@ -55,6 +93,16 @@ def send_message_to_number(driver, phone, encoded_message, log_callback):
     except Exception as e:
         log_callback(f"❌ Failed: {phone} — {e}")
         return False
+    
+
+def show_all_contacts():
+    conn = sqlite3.connect("whatsapp_contacts.db")
+    c = conn.cursor()
+    c.execute("SELECT phone, name, status, timestamp FROM contacts")
+    rows = c.fetchall()
+    for row in rows:
+        print(row)
+    conn.close()
 
 
 # ---------------------------------------------
@@ -159,6 +207,14 @@ class WhatsAppModernApp(ctk.CTk):
         if df.empty:
             self.log("❌ No valid phone numbers.")
             return
+        
+        # ---------- Add contacts to database ----------
+        for idx, row in df.iterrows():
+            phone = clean_phone(row["number"])
+            name = row.get("name", "")
+            add_contact(phone, name)
+        show_all_contacts()  # <- This will print all contacts in the DB
+
 
         self.log("🚀 Starting Chrome…")
 
@@ -185,6 +241,7 @@ class WhatsAppModernApp(ctk.CTk):
 
         self.log("✅ Logged in! Sending messages…")
 
+        # ---------- Sending Loop with DB update ----------
         for i, row in df.iterrows():
             phone = row["number"]
             name = row.get("name", "")
@@ -197,7 +254,13 @@ class WhatsAppModernApp(ctk.CTk):
             encoded = urllib.parse.quote(msg)
 
             self.log(f"➡ Sending to {phone} ({i+1}/{len(df)})…")
-            send_message_to_number(driver, phone, encoded, self.log)
+            
+            success = send_message_to_number(driver, phone, encoded, self.log)
+            if success:
+                update_status(phone, "Sent")
+            else:
+                update_status(phone, "Failed")
+            
             time.sleep(4)
 
         self.log("🎉 All messages sent!")
@@ -206,5 +269,17 @@ class WhatsAppModernApp(ctk.CTk):
 
 # ---------------- RUN APP ----------------
 if __name__ == "__main__":
+    init_db()
+    import sqlite3
+
+    conn = sqlite3.connect("whatsapp_contacts.db")
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
+    table_exists = c.fetchone()
+    if table_exists:
+        print("✅ Database connected and 'contacts' table exists!")
+    else:
+        print("❌ Database connection failed or table missing.")
+    conn.close()
     app = WhatsAppModernApp()
     app.mainloop()

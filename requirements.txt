@@ -1,4 +1,4 @@
 selenium
-tkinter
 pandas
 openpyxl
+customtkinter

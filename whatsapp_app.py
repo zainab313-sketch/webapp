@@ -1,0 +1,210 @@
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog
+import pandas as pd
+import time
+import urllib.parse
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+
+# ---------------------------------------------
+#           WhatsApp Functions
+# ---------------------------------------------
+
+def clean_phone(number_str):
+    if pd.isna(number_str):
+        return ""
+    s = str(number_str)
+    return "".join(ch for ch in s if ch.isdigit())
+
+
+def send_message_to_number(driver, phone, encoded_message, log_callback):
+    url = f"https://web.whatsapp.com/send?phone={phone}&text={encoded_message}"
+    driver.get(url)
+
+    try:
+        chat_box = WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[@contenteditable='true' and @data-tab='10']")
+            )
+        )
+
+        time.sleep(1)
+        chat_box.click()
+        time.sleep(0.5)
+
+        chat_box.send_keys(Keys.ENTER)
+        time.sleep(1)
+
+        try:
+            send_button = driver.find_element(By.XPATH, "//span[@data-icon='send']")
+            send_button.click()
+        except:
+            pass
+
+        log_callback(f"✔ Sent to {phone}")
+        return True
+
+    except Exception as e:
+        log_callback(f"❌ Failed: {phone} — {e}")
+        return False
+
+
+# ---------------------------------------------
+#               Modern GUI
+# ---------------------------------------------
+
+class WhatsAppModernApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("WhatsApp Bulk Messenger — Modern Edition")
+        self.geometry("780x620")
+
+        ctk.set_appearance_mode("dark")     # "light" / "dark" / "system"
+        ctk.set_default_color_theme("blue") # blue, dark-blue, green
+
+        self.excel_path = ""
+
+        # ---------- HEADER ----------
+        header = ctk.CTkLabel(self, text="WhatsApp Bulk Messaging App", 
+                              font=("Poppins", 28, "bold"))
+        header.pack(pady=15)
+
+        # ---------- FILE SELECT ----------
+        file_frame = ctk.CTkFrame(self, corner_radius=15)
+        file_frame.pack(pady=10, padx=20, fill="x")
+
+        ctk.CTkLabel(file_frame, text="Choose Excel File:", font=("Poppins", 14)).pack(pady=5)
+
+        choose_button = ctk.CTkButton(file_frame, text="Browse File", 
+                                      command=self.choose_file, width=200)
+        choose_button.pack(pady=5)
+
+        self.file_label = ctk.CTkLabel(file_frame, text="No file selected", 
+                                       text_color="gray80", font=("Poppins", 12))
+        self.file_label.pack(pady=5)
+
+        # ---------- MESSAGE BOX ----------
+        msg_frame = ctk.CTkFrame(self, corner_radius=15)
+        msg_frame.pack(pady=10, padx=20, fill="both")
+
+        ctk.CTkLabel(msg_frame, text="Message Template:", font=("Poppins", 14)).pack(pady=5)
+
+        self.message_box = ctk.CTkTextbox(msg_frame, height=120, width=520, corner_radius=12)
+        self.message_box.insert("1.0", "Assalamualaikum {name},\nThis is an automated message.")
+        self.message_box.pack(pady=10)
+
+        # ---------- SEND BUTTON ----------
+        send_button = ctk.CTkButton(self, text="Start Sending", 
+                                    font=("Poppins", 16, "bold"),
+                                    command=self.start_sending, height=45, corner_radius=10)
+        send_button.pack(pady=10)
+
+        # ---------- LOG AREA ----------
+        log_frame = ctk.CTkFrame(self, corner_radius=15)
+        log_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        ctk.CTkLabel(log_frame, text="Log Output:", font=("Poppins", 14)).pack(pady=5)
+
+        self.log_window = ctk.CTkTextbox(log_frame, height=200, width=700)
+        self.log_window.pack(padx=10, pady=10)
+
+    # -------------------------------------
+    #         Choose Excel File
+    # -------------------------------------
+    def choose_file(self):
+        self.excel_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
+        if self.excel_path:
+            self.file_label.configure(text=self.excel_path, text_color="white")
+
+    # -------------------------------------
+    #             Logging
+    # -------------------------------------
+    def log(self, text):
+        self.log_window.insert("end", text + "\n")
+        self.log_window.see("end")
+        self.update()
+
+    # -------------------------------------
+    #          Main Sending Logic
+    # -------------------------------------
+    def start_sending(self):
+        if not self.excel_path:
+            self.log("❌ Please select an Excel file first.")
+            return
+
+        message_template = self.message_box.get("1.0", "end").strip()
+
+        try:
+            df = pd.read_excel(self.excel_path)
+        except:
+            self.log("❌ Could not read Excel file.")
+            return
+
+        if "number" not in df.columns:
+            self.log("❌ Excel missing 'number' column.")
+            return
+
+        df["number"] = df["number"].apply(clean_phone)
+        df = df[df["number"] != ""].reset_index(drop=True)
+
+        if df.empty:
+            self.log("❌ No valid phone numbers.")
+            return
+
+        self.log("🚀 Starting Chrome…")
+
+        # ---------- Selenium Setup ----------
+        options = webdriver.ChromeOptions()
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument(r"--user-data-dir=C:\chrome-whatsapp-profile")
+
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
+                                  options=options)
+
+        driver.get("https://web.whatsapp.com")
+        self.log("📱 Login to WhatsApp Web (scan QR if needed)…")
+
+        try:
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@contenteditable='true']"))
+            )
+        except:
+            self.log("❌ Login failed (timeout).")
+            return
+
+        self.log("✅ Logged in! Sending messages…")
+
+        for i, row in df.iterrows():
+            phone = row["number"]
+            name = row.get("name", "")
+
+            try:
+                msg = message_template.format(name=name)
+            except:
+                msg = message_template
+
+            encoded = urllib.parse.quote(msg)
+
+            self.log(f"➡ Sending to {phone} ({i+1}/{len(df)})…")
+            send_message_to_number(driver, phone, encoded, self.log)
+            time.sleep(4)
+
+        self.log("🎉 All messages sent!")
+        driver.quit()
+
+
+# ---------------- RUN APP ----------------
+if __name__ == "__main__":
+    app = WhatsAppModernApp()
+    app.mainloop()

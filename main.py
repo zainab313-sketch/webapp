@@ -264,9 +264,21 @@ class WhatsAppModernApp(ctk.CTk):
         self.log("✅ Logged in! Sending messages…")
 
         # ---------- Sending Loop with DB update ----------
+        # ---------- Sending Loop with DB check ----------
         for i, row in df.iterrows():
             phone = row["number"]
             name = row.get("name", "")
+
+    # Skip contacts already sent
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT status FROM contacts WHERE phone=?", (phone,))
+            result = c.fetchone()
+            conn.close()
+
+            if result and result[0] == "Sent":
+                self.log(f"⚠ Skipping {phone} — already sent.")
+                continue
 
             try:
                 msg = message_template.format(name=name)

@@ -20,6 +20,37 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
+
+def init_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+
+    # Set Chrome executable path if needed
+    options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+    # Persistent login (so WhatsApp Web stays logged in)
+    options.add_argument(r"--user-data-dir=C:\chrome-whatsapp-profile")
+
+    try:
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()),
+            options=options
+        )
+        driver.get("https://web.whatsapp.com")
+        return driver
+    except Exception as e:
+        print("[ERROR] Failed to start Chrome:", e)
+        return None
+
 # === CONFIG ===
 EXCEL_FILE = "contacts.xlsx"     # path to your excel
 SHEET_NAME = "Sheet1"            # sheet name

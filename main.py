@@ -4,6 +4,7 @@ from tkinter import filedialog
 import pandas as pd
 import time
 import urllib.parse
+import threading
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -16,7 +17,40 @@ from webdriver_manager.chrome import ChromeDriverManager
 import sqlite3
 import datetime
 
-# ---------------- Database Setup ----------------
+# ---------------- Driver ----------------
+def init_driver(headless=False):
+    options = webdriver.ChromeOptions()
+    options.add_argument(r"--user-data-dir=C:\chrome-whatsapp-profile")
+    options.add_argument("--start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+    if headless:
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        driver.get("https://web.whatsapp.com")
+        return driver
+    except Exception as e:
+        print("[ERROR] Failed to start Chrome:", e)
+        return None
+
+def wait_for_login(driver, timeout=60):
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@contenteditable='true']"))
+        )
+        return True
+    except:
+        return False
+
+# ---------------- Database ----------------
 DB_FILE = "whatsapp_contacts.db"
 
 def init_db():
@@ -38,7 +72,7 @@ def add_contact(phone, name):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
-        c.execute("INSERT OR IGNORE INTO contacts (phone, name, status) VALUES (?, ?, ?)", 
+        c.execute("INSERT OR IGNORE INTO contacts (phone, name, status) VALUES (?, ?, ?)",
                   (phone, name, "Pending"))
         conn.commit()
     except Exception as e:
@@ -53,161 +87,132 @@ def update_status(phone, status):
     conn.commit()
     conn.close()
 
-# ---------------------------------------------
-#           WhatsApp Functions
-# ---------------------------------------------
-
+# ---------------- Phone cleaning ----------------
 def clean_phone(number_str):
     if pd.isna(number_str):
         return ""
     s = str(number_str)
     return "".join(ch for ch in s if ch.isdigit())
 
+def normalize_number(number: str) -> str:
+    number = number.strip().replace(" ", "").replace("-", "")
+    if number.startswith("92") and len(number) == 12:
+        return number
+    if number.startswith("03") and len(number) == 11:
+        return "92" + number[1:]
+    if number.startswith("0") and len(number) >= 10:
+        return "92" + number[1:]
+    if number.startswith("3") and len(number) == 10:
+        return "92" + number
+    return number
+
+# ---------------- WhatsApp ----------------
 def send_message_to_number(driver, phone, encoded_message, log_callback):
     url = f"https://web.whatsapp.com/send?phone={phone}&text={encoded_message}"
-    driver.get(url)
-
     try:
-        chat_box = WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//div[@contenteditable='true' and @data-tab='10']")
-            )
+        driver.get(url)
+        chat_box = WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@contenteditable='true' and @data-tab='10']"))
         )
-
-        time.sleep(1)
-        chat_box.click()
         time.sleep(0.5)
-
+        chat_box.click()
         chat_box.send_keys(Keys.ENTER)
-        time.sleep(1)
-
+        time.sleep(0.5)
+        # fallback send button
         try:
-            send_button = driver.find_element(By.XPATH, "//span[@data-icon='send']")
-            send_button.click()
+            send_btn = driver.find_element(By.XPATH, "//span[@data-icon='send']")
+            send_btn.click()
         except:
             pass
-
         log_callback(f"✔ Sent to {phone}")
         return True
-
-    except Exception as e:
-        log_callback(f"❌ Failed: {phone} — {e}")
+    except:
+        log_callback(f"❌ Skipped invalid/failed number: {phone}")
         return False
 
-# ---------------------------------------------
-#               Modern GUI
-# ---------------------------------------------
-
+# ---------------- GUI ----------------
 class WhatsAppModernApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-
         self.title("WhatsApp Bulk Messenger — Modern Edition")
         self.geometry("780x700")
-
-        ctk.set_appearance_mode("dark")     # "light" / "dark" / "system"
-        ctk.set_default_color_theme("blue") # blue, dark-blue, green
-
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
         self.excel_path = ""
 
-        # ---------- HEADER ----------
-        header = ctk.CTkLabel(self, text="WhatsApp Bulk Messaging App", 
-                              font=("Poppins", 28, "bold"))
+        # Header
+        header = ctk.CTkLabel(self, text="WhatsApp Bulk Messaging App", font=("Poppins", 28, "bold"))
         header.pack(pady=15)
 
-        # ---------- FILE SELECT ----------
+        # File select
         file_frame = ctk.CTkFrame(self, corner_radius=15)
         file_frame.pack(pady=10, padx=20, fill="x")
-
         ctk.CTkLabel(file_frame, text="Choose Excel File:", font=("Poppins", 14)).pack(pady=5)
-
-        choose_button = ctk.CTkButton(file_frame, text="Browse File", 
-                                      command=self.choose_file, width=200)
+        choose_button = ctk.CTkButton(file_frame, text="Browse File", command=self.choose_file, width=200)
         choose_button.pack(pady=5)
-
-        self.file_label = ctk.CTkLabel(file_frame, text="No file selected", 
-                                       text_color="gray80", font=("Poppins", 12))
+        self.file_label = ctk.CTkLabel(file_frame, text="No file selected", text_color="gray80", font=("Poppins", 12))
         self.file_label.pack(pady=5)
 
-        # ---------- MESSAGE BOX ----------
+        # Message box
         msg_frame = ctk.CTkFrame(self, corner_radius=15)
         msg_frame.pack(pady=10, padx=20, fill="both")
-
         ctk.CTkLabel(msg_frame, text="Message Template:", font=("Poppins", 14)).pack(pady=5)
-
         self.message_box = ctk.CTkTextbox(msg_frame, height=120, width=520, corner_radius=12)
         self.message_box.insert("1.0", "Assalamualaikum {name},\nThis is an automated message.")
         self.message_box.pack(pady=10)
 
-        # ---------- SEND BUTTON ----------
-        send_button = ctk.CTkButton(self, text="Start Sending", 
-                                    font=("Poppins", 16, "bold"),
-                                    command=self.start_sending, height=45, corner_radius=10)
+        # Buttons
+        send_button = ctk.CTkButton(self, text="Start Sending", font=("Poppins", 16, "bold"),
+                                    command=self.start_sending_thread, height=45, corner_radius=10)
         send_button.pack(pady=10)
-
-        # ---------- VIEW CONTACTS BUTTON ----------
-        view_button = ctk.CTkButton(self, text="View Contacts & Status",
-                                     font=("Poppins", 14, "bold"),
+        view_button = ctk.CTkButton(self, text="View Contacts & Status", font=("Poppins", 14, "bold"),
                                      command=self.show_contacts, height=40, corner_radius=10)
         view_button.pack(pady=5)
 
-        # ---------- LOG AREA ----------
+        # Log area
         log_frame = ctk.CTkFrame(self, corner_radius=15)
         log_frame.pack(pady=10, padx=20, fill="both", expand=True)
-
         ctk.CTkLabel(log_frame, text="Log Output:", font=("Poppins", 14)).pack(pady=5)
-
         self.log_window = ctk.CTkTextbox(log_frame, height=200, width=700)
         self.log_window.pack(padx=10, pady=10)
 
-    # -------------------------------------
-    #         Choose Excel File
-    # -------------------------------------
+    # ---------------- GUI Methods ----------------
     def choose_file(self):
         self.excel_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
         if self.excel_path:
             self.file_label.configure(text=self.excel_path, text_color="white")
 
-    # -------------------------------------
-    #             Logging
-    # -------------------------------------
     def log(self, text):
         self.log_window.insert("end", text + "\n")
         self.log_window.see("end")
         self.update()
 
-    # -------------------------------------
-    #          Show Contacts & Status
-    # -------------------------------------
     def show_contacts(self):
         contacts_window = ctk.CTkToplevel(self)
         contacts_window.title("Contacts & Status")
         contacts_window.geometry("600x400")
-
         frame = ctk.CTkFrame(contacts_window, corner_radius=15)
         frame.pack(padx=10, pady=10, fill="both", expand=True)
-
         textbox = ctk.CTkTextbox(frame, width=580, height=350)
         textbox.pack(padx=10, pady=10, fill="both", expand=True)
-
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("SELECT phone, name, status, timestamp FROM contacts")
         rows = c.fetchall()
         conn.close()
-
         textbox.insert("0.0", f"{'Phone':<15}{'Name':<20}{'Status':<10}{'Timestamp':<20}\n")
         textbox.insert("0.0", "-"*70 + "\n")
         for row in rows:
             phone, name, status, timestamp = row
             timestamp = timestamp if timestamp else "-"
             textbox.insert("end", f"{phone:<15}{name:<20}{status:<10}{timestamp:<20}\n")
+        textbox.configure(state="disabled")
 
-        textbox.configure(state="disabled")  # make read-only
+    # ---------------- Thread ----------------
+    def start_sending_thread(self):
+        threading.Thread(target=self.start_sending, daemon=True).start()
 
-    # -------------------------------------
-    #          Main Sending Logic
-    # -------------------------------------
+    # ---------------- Sending ----------------
     def start_sending(self):
         if not self.excel_path:
             self.log("❌ Please select an Excel file first.")
@@ -220,63 +225,85 @@ class WhatsAppModernApp(ctk.CTk):
         except:
             self.log("❌ Could not read Excel file.")
             return
-
-        if "number" not in df.columns:
-            self.log("❌ Excel missing 'number' column.")
+        
+        # Ensure 'number' and 'status' columns exist
+        if "number" not in df.columns or "status" not in df.columns:
+            self.log("❌ Excel must have 'number' and 'status' columns.")
             return
 
-        # df["number"] = df["number"].apply(clean_phone)
-        df["number"] = df["number"].apply(clean_phone).apply(normalize_number)
-        df = df[df["number"] != ""].reset_index(drop=True)
+        # Filter only rows where status is 'Applied'
+        df = df[df["status"].str.strip().str.lower() == "applied"].reset_index(drop=True)
 
         if df.empty:
-            self.log("❌ No valid phone numbers.")
+            self.log("❌ No contacts with status 'Applied' found.")
             return
 
-        # ---------- Add contacts to database ----------
-        for idx, row in df.iterrows():
-            phone = clean_phone(row["number"])
+        # Clean and normalize numbers
+        df["number"] = df["number"].apply(clean_phone).apply(normalize_number)
+        df = df[df["number"] != ""].reset_index(drop=True)
+        if df.empty:
+            self.log("❌ No valid phone numbers after cleaning.")
+            return
+        
+        if "WhatsApp Status" not in df.columns:
+            df["WhatsApp Status"] = ""
+
+        # Add contacts to DB
+        for _, row in df.iterrows():
+            phone = row["number"]
             name = row.get("name", "")
             add_contact(phone, name)
 
-        self.log("🚀 Starting Chrome…")
+        # if "number" not in df.columns:
+        #     self.log("❌ Excel missing 'number' column.")
+        #     return
 
-        # ---------- Selenium Setup ----------
-        options = webdriver.ChromeOptions()
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument(r"--user-data-dir=C:\chrome-whatsapp-profile")
+        # df["number"] = df["number"].apply(clean_phone).apply(normalize_number)
+        # df = df[df["number"] != ""].reset_index(drop=True)
+        # if df.empty:
+        #     self.log("❌ No valid phone numbers.")
+        #     return
 
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
-                                  options=options)
+        # # Add contacts to DB
+        # for _, row in df.iterrows():
+        #     phone = row["number"]
+        #     name = row.get("name", "")
+        #     add_contact(phone, name)
 
-        driver.get("https://web.whatsapp.com")
-        self.log("📱 Login to WhatsApp Web (scan QR if needed)…")
-
-        try:
-            WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.XPATH, "//div[@contenteditable='true']"))
-            )
-        except:
-            self.log("❌ Login failed (timeout).")
+        # ---------------- Chrome Login ----------------
+        self.log("🚀 Launching Chrome for login…")
+        driver = init_driver(headless=False)
+        if not driver:
+            self.log("❌ Could not start Chrome.")
             return
 
-        self.log("✅ Logged in! Sending messages…")
+        self.log("📱 Please scan QR if needed…")
+        if not wait_for_login(driver, timeout=120):
+            self.log("❌ Login failed or timeout.")
+            driver.quit()
+            return
+        self.log("✅ Login successful!")
+        driver.quit()
 
-        # ---------- Sending Loop with DB update ----------
-        # ---------- Sending Loop with DB check ----------
+        # ---------------- Chrome Headless ----------------
+        self.log("🚀 Relaunching Chrome in background (headless)…")
+        driver = init_driver(headless=True)
+        if not driver:
+            self.log("❌ Could not start Chrome headless.")
+            return
+        self.log("✅ Chrome ready for sending…")
+
+        # ---------------- Sending Loop ----------------
         for i, row in df.iterrows():
             phone = row["number"]
             name = row.get("name", "")
 
-    # Skip contacts already sent
+            # Skip already sent
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("SELECT status FROM contacts WHERE phone=?", (phone,))
             result = c.fetchone()
             conn.close()
-
             if result and result[0] == "Sent":
                 self.log(f"⚠ Skipping {phone} — already sent.")
                 continue
@@ -287,21 +314,33 @@ class WhatsAppModernApp(ctk.CTk):
                 msg = message_template
 
             encoded = urllib.parse.quote(msg)
-
             self.log(f"➡ Sending to {phone} ({i+1}/{len(df)})…")
-            
             success = send_message_to_number(driver, phone, encoded, self.log)
+
             if success:
                 update_status(phone, "Sent")
+                df.loc[i, "WhatsApp Status"] = ""  # leave blank for valid
             else:
                 update_status(phone, "Failed")
-            
+                df.loc[i, "WhatsApp Status"] = "Invalid"  # mark invalid
+
+            # Save Excel after each row (optional, safe)
+            df.to_excel(self.excel_path, index=False)
+
+            # encoded = urllib.parse.quote(msg)
+            # self.log(f"➡ Sending to {phone} ({i+1}/{len(df)})…")
+            # success = send_message_to_number(driver, phone, encoded, self.log)
+            # if success:
+            #     update_status(phone, "Sent")
+            # else:
+            #     update_status(phone, "Failed")
             time.sleep(4)
 
         self.log("🎉 All messages sent!")
         driver.quit()
 
-# ---------------- RUN APP ----------------
+
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     init_db()
     app = WhatsAppModernApp()
